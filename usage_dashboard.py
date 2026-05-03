@@ -3,7 +3,6 @@ import argparse
 import datetime as dt
 import glob
 import hashlib
-import html
 import json
 import os
 import socket
@@ -28,7 +27,6 @@ DEFAULT_CONFIG = {
     "cliproxy_host": "127.0.0.1",
     "cliproxy_port": 8317,
     "management_key": "",
-    "proxy_api_key": "",
     "poll_interval_seconds": 2,
     "quota_refresh_seconds": 300,
     "dashboard_host": "127.0.0.1",
@@ -51,7 +49,6 @@ def load_config():
     merged = dict(DEFAULT_CONFIG)
     merged.update(cfg)
     merged["management_key"] = os.environ.get("CLIPROXY_MANAGEMENT_KEY", merged["management_key"])
-    merged["proxy_api_key"] = os.environ.get("CLIPROXY_API_KEY", merged["proxy_api_key"])
     return merged
 
 

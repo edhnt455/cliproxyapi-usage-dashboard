@@ -39,13 +39,11 @@ chmod 600 ~/.cli-proxy-api/usage-dashboard/config.json
 Edit `~/.cli-proxy-api/usage-dashboard/config.json` and set:
 
 - `management_key`
-- `proxy_api_key`
 
 You can also use environment variables:
 
 ```bash
 export CLIPROXY_MANAGEMENT_KEY="..."
-export CLIPROXY_API_KEY="..."
 ```
 
 Initialize the database:
