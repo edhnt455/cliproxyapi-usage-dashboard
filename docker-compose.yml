@@ -8,6 +8,8 @@ services:
       CLIPROXY_USAGE_BASE_DIR: /data
       CLIPROXY_AUTH_DIR: /cliproxy-auth
       CLIPROXY_MANAGEMENT_KEY: replace-with-your-management-key
+      HTTPS_PROXY: http://127.0.0.1:7890
+      HTTP_PROXY: http://127.0.0.1:7890
     volumes:
       - ./data:/data
       - /root/.cli-proxy-api:/cliproxy-auth:ro
@@ -22,6 +24,8 @@ services:
       CLIPROXY_USAGE_BASE_DIR: /data
       CLIPROXY_AUTH_DIR: /cliproxy-auth
       CLIPROXY_MANAGEMENT_KEY: replace-with-your-management-key
+      HTTPS_PROXY: http://127.0.0.1:7890
+      HTTP_PROXY: http://127.0.0.1:7890
       CLIPROXY_DASHBOARD_HOST: 0.0.0.0
       CLIPROXY_DASHBOARD_PORT: 8320
     volumes:
