@@ -1,30 +1,30 @@
 services:
   usage-collector:
-    build: .
+    image: edhnt4551/cliproxyapi-usage-dashboard:latest
     container_name: cliproxyapi-usage-collector
     network_mode: host
     restart: unless-stopped
     environment:
       CLIPROXY_USAGE_BASE_DIR: /data
       CLIPROXY_AUTH_DIR: /cliproxy-auth
-      CLIPROXY_MANAGEMENT_KEY: ${CLIPROXY_MANAGEMENT_KEY}
+      CLIPROXY_MANAGEMENT_KEY: replace-with-your-management-key
     volumes:
       - ./data:/data
-      - ${CLIPROXY_AUTH_DIR:-/root/.cli-proxy-api}:/cliproxy-auth:ro
+      - /root/.cli-proxy-api:/cliproxy-auth:ro
     command: ["collect"]
 
   usage-dashboard:
-    build: .
+    image: edhnt4551/cliproxyapi-usage-dashboard:latest
     container_name: cliproxyapi-usage-dashboard
     network_mode: host
     restart: unless-stopped
     environment:
       CLIPROXY_USAGE_BASE_DIR: /data
       CLIPROXY_AUTH_DIR: /cliproxy-auth
-      CLIPROXY_MANAGEMENT_KEY: ${CLIPROXY_MANAGEMENT_KEY}
-      CLIPROXY_DASHBOARD_HOST: ${CLIPROXY_DASHBOARD_HOST:-127.0.0.1}
-      CLIPROXY_DASHBOARD_PORT: ${CLIPROXY_DASHBOARD_PORT:-8320}
+      CLIPROXY_MANAGEMENT_KEY: replace-with-your-management-key
+      CLIPROXY_DASHBOARD_HOST: 0.0.0.0
+      CLIPROXY_DASHBOARD_PORT: 8320
     volumes:
       - ./data:/data
-      - ${CLIPROXY_AUTH_DIR:-/root/.cli-proxy-api}:/cliproxy-auth:ro
+      - /root/.cli-proxy-api:/cliproxy-auth:ro
     command: ["serve"]
