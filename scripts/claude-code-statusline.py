@@ -19,7 +19,7 @@ def main():
     except (OSError, urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError, ValueError):
         print("Codex usage n/a")
         return 0
-    text = payload.get("text") or "Codex usage n/a"
+    text = payload.get("statusline_text") or payload.get("text") or "Codex usage n/a"
     print(text.replace("\n", " "))
     return 0
 

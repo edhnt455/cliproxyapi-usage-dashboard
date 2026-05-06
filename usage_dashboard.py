@@ -509,12 +509,30 @@ def normalize_range(range_name, default="5h"):
     return "5h"
 
 
+def compact_local_time(value):
+    if not value:
+        return ""
+    try:
+        parsed = dt.datetime.strptime(value, "%Y-%m-%d %H:%M:%S").replace(tzinfo=LOCAL_TZ)
+    except ValueError:
+        return value
+    now = dt.datetime.now(LOCAL_TZ)
+    if parsed.date() == now.date():
+        return parsed.strftime("%H:%M")
+    if parsed.year == now.year:
+        return parsed.strftime("%m-%d %H:%M")
+    return parsed.strftime("%Y-%m-%d %H:%M")
+
+
+
 def query_hud(range_name=None, quota_limit=None):
     cfg = load_config()
     range_name = normalize_range(range_name, str(cfg.get("hud_default_range", "5h")))
     quota_limit = clamp_int(quota_limit, int(cfg.get("hud_quota_limit") or 3), 0, 10)
     summary = query_summary(range_name)
+    week_summary = query_summary("7d")
     usage = dict(summary["summary"])
+    week_usage = dict(week_summary["summary"])
     quotas = latest_quotas(refresh=False)
     sorted_quotas = sorted(
         quotas,
@@ -540,6 +558,7 @@ def query_hud(range_name=None, quota_limit=None):
     primary_values = [int(q.get("primary_remaining_percent") or 0) for q in quotas]
     secondary_values = [int(q.get("secondary_remaining_percent") or 0) for q in quotas]
     limited = sum(1 for q in quotas if not q.get("allowed") or q.get("limit_reached"))
+    focus_quota = quota_accounts[0] if quota_accounts else None
     if quotas:
         quota_text = f"quota min {min(primary_values)}% 5h / {min(secondary_values)}% 7d"
         if limited:
@@ -550,18 +569,45 @@ def query_hud(range_name=None, quota_limit=None):
         f"Codex {range_name} {human_tokens(usage.get('total_tokens'))} tok | "
         f"req {int(usage.get('requests') or 0)} | fail {int(usage.get('failed') or 0)} | {quota_text}"
     )
+    if focus_quota:
+        statusline_text = (
+            f"Codex {range_name} {human_tokens(usage.get('total_tokens'))} | "
+            f"7d {human_tokens(week_usage.get('total_tokens'))} | "
+            f"left {focus_quota['primary_remaining_percent']}%/{focus_quota['secondary_remaining_percent']}% | "
+            f"reset {compact_local_time(focus_quota.get('primary_reset_at'))}/{compact_local_time(focus_quota.get('secondary_reset_at'))}"
+        )
+        if limited:
+            statusline_text += f" | LIMIT {limited}"
+    else:
+        statusline_text = (
+            f"Codex {range_name} {human_tokens(usage.get('total_tokens'))} | "
+            f"7d {human_tokens(week_usage.get('total_tokens'))} | quota n/a"
+        )
     return {
         "ok": True,
         "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
         "range": range_name,
         "text": text,
+        "statusline_text": statusline_text,
         "usage": usage,
+        "week_usage": week_usage,
         "quota": {
             "count": len(quotas),
             "limited": limited,
             "min_primary_remaining_percent": min(primary_values) if primary_values else None,
             "min_secondary_remaining_percent": min(secondary_values) if secondary_values else None,
             "accounts": quota_accounts,
+            "focus": {
+                "email": focus_quota.get("email") if focus_quota else None,
+                "allowed": focus_quota.get("allowed") if focus_quota else None,
+                "limit_reached": focus_quota.get("limit_reached") if focus_quota else None,
+                "primary_remaining_percent": focus_quota.get("primary_remaining_percent") if focus_quota else None,
+                "secondary_remaining_percent": focus_quota.get("secondary_remaining_percent") if focus_quota else None,
+                "primary_reset_at": focus_quota.get("primary_reset_at") if focus_quota else None,
+                "secondary_reset_at": focus_quota.get("secondary_reset_at") if focus_quota else None,
+                "primary_reset_at_short": compact_local_time(focus_quota.get("primary_reset_at")) if focus_quota else None,
+                "secondary_reset_at_short": compact_local_time(focus_quota.get("secondary_reset_at")) if focus_quota else None,
+            },
         },
     }
 
