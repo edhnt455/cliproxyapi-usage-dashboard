@@ -13,14 +13,17 @@ import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
-BASE_DIR = os.path.expanduser("~/.cli-proxy-api/usage-dashboard")
-AUTH_DIR = os.path.expanduser("~/.cli-proxy-api")
+BASE_DIR = os.path.expanduser(os.environ.get("CLIPROXY_USAGE_BASE_DIR", "~/.cli-proxy-api/usage-dashboard"))
+AUTH_DIR = os.path.expanduser(os.environ.get("CLIPROXY_AUTH_DIR", "~/.cli-proxy-api"))
 DB_PATH = os.path.join(BASE_DIR, "usage.sqlite")
 CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
-LOCAL_TZ = ZoneInfo("Asia/Shanghai")
+try:
+    LOCAL_TZ = ZoneInfo("Asia/Shanghai")
+except ZoneInfoNotFoundError:
+    LOCAL_TZ = dt.timezone(dt.timedelta(hours=8), "Asia/Shanghai")
 
 
 DEFAULT_CONFIG = {
@@ -31,6 +34,8 @@ DEFAULT_CONFIG = {
     "quota_refresh_seconds": 300,
     "dashboard_host": "127.0.0.1",
     "dashboard_port": 8320,
+    "hud_default_range": "5h",
+    "hud_quota_limit": 3,
 }
 
 
@@ -49,6 +54,8 @@ def load_config():
     merged = dict(DEFAULT_CONFIG)
     merged.update(cfg)
     merged["management_key"] = os.environ.get("CLIPROXY_MANAGEMENT_KEY", merged["management_key"])
+    merged["dashboard_host"] = os.environ.get("CLIPROXY_DASHBOARD_HOST", merged["dashboard_host"])
+    merged["dashboard_port"] = os.environ.get("CLIPROXY_DASHBOARD_PORT", merged["dashboard_port"])
     return merged
 
 
@@ -355,10 +362,10 @@ def collect_forever():
                         if inserted:
                             print(f"inserted {inserted} usage events", flush=True)
                     now = time.time()
-                    if now - last_quota >= cfg["quota_refresh_seconds"]:
+                    if now - last_quota >= float(cfg["quota_refresh_seconds"]):
                         refresh_quota(force=True)
                         last_quota = now
-                    time.sleep(cfg["poll_interval_seconds"])
+                    time.sleep(float(cfg["poll_interval_seconds"]))
             finally:
                 client.close()
         except Exception as exc:
@@ -442,8 +449,9 @@ def query_summary(range_name):
     }
 
 
-def latest_quotas(force=False):
-    refresh_quota(force=force)
+def latest_quotas(force=False, refresh=True):
+    if refresh:
+        refresh_quota(force=force)
     with db_connect() as conn:
         rows = conn.execute(
             """
@@ -475,6 +483,89 @@ def recent_requests(limit=100):
     return result
 
 
+def human_tokens(value):
+    value = int(value or 0)
+    if value >= 1_000_000:
+        return f"{value / 1_000_000:.1f}M"
+    if value >= 1_000:
+        return f"{value / 1_000:.1f}k"
+    return str(value)
+
+
+def clamp_int(value, default, minimum, maximum):
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        number = default
+    return max(minimum, min(maximum, number))
+
+
+def normalize_range(range_name, default="5h"):
+    allowed = {"today", "1h", "5h", "24h", "7d"}
+    if range_name in allowed:
+        return range_name
+    if default in allowed:
+        return default
+    return "5h"
+
+
+def query_hud(range_name=None, quota_limit=None):
+    cfg = load_config()
+    range_name = normalize_range(range_name, str(cfg.get("hud_default_range", "5h")))
+    quota_limit = clamp_int(quota_limit, int(cfg.get("hud_quota_limit") or 3), 0, 10)
+    summary = query_summary(range_name)
+    usage = dict(summary["summary"])
+    quotas = latest_quotas(refresh=False)
+    sorted_quotas = sorted(
+        quotas,
+        key=lambda q: (
+            0 if not q.get("allowed") else 1,
+            int(q.get("primary_remaining_percent") or 0),
+            int(q.get("secondary_remaining_percent") or 0),
+            str(q.get("email") or ""),
+        ),
+    )
+    quota_accounts = [
+        {
+            "email": q.get("email"),
+            "allowed": bool(q.get("allowed")),
+            "limit_reached": bool(q.get("limit_reached")),
+            "primary_remaining_percent": int(q.get("primary_remaining_percent") or 0),
+            "secondary_remaining_percent": int(q.get("secondary_remaining_percent") or 0),
+            "primary_reset_at": q.get("primary_reset_at"),
+            "secondary_reset_at": q.get("secondary_reset_at"),
+        }
+        for q in sorted_quotas[:quota_limit]
+    ]
+    primary_values = [int(q.get("primary_remaining_percent") or 0) for q in quotas]
+    secondary_values = [int(q.get("secondary_remaining_percent") or 0) for q in quotas]
+    limited = sum(1 for q in quotas if not q.get("allowed") or q.get("limit_reached"))
+    if quotas:
+        quota_text = f"quota min {min(primary_values)}% 5h / {min(secondary_values)}% 7d"
+        if limited:
+            quota_text = f"quota LIMIT {limited} acct | min {min(primary_values)}% 5h"
+    else:
+        quota_text = "quota n/a"
+    text = (
+        f"Codex {range_name} {human_tokens(usage.get('total_tokens'))} tok | "
+        f"req {int(usage.get('requests') or 0)} | fail {int(usage.get('failed') or 0)} | {quota_text}"
+    )
+    return {
+        "ok": True,
+        "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "range": range_name,
+        "text": text,
+        "usage": usage,
+        "quota": {
+            "count": len(quotas),
+            "limited": limited,
+            "min_primary_remaining_percent": min(primary_values) if primary_values else None,
+            "min_secondary_remaining_percent": min(secondary_values) if secondary_values else None,
+            "accounts": quota_accounts,
+        },
+    }
+
+
 def json_response(handler, payload, status=200):
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     handler.send_response(status)
@@ -502,6 +593,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
             elif parsed.path == "/api/requests":
                 limit = min(500, int(qs.get("limit", ["100"])[0]))
                 json_response(self, {"requests": recent_requests(limit)})
+            elif parsed.path == "/api/hud":
+                json_response(self, query_hud(qs.get("range", [None])[0], qs.get("quota_limit", [None])[0]))
             elif parsed.path == "/api/health":
                 json_response(self, {"ok": True, "db": DB_PATH, "auth_files": len(auth_files())})
             else:
@@ -662,8 +755,10 @@ load(false); setInterval(() => load(false), 30000);
 def serve():
     init_db()
     cfg = load_config()
-    server = ThreadingHTTPServer((cfg["dashboard_host"], int(cfg["dashboard_port"])), DashboardHandler)
-    print(f"dashboard listening on http://{cfg['dashboard_host']}:{cfg['dashboard_port']}", flush=True)
+    host = str(cfg["dashboard_host"])
+    port = int(cfg["dashboard_port"])
+    server = ThreadingHTTPServer((host, port), DashboardHandler)
+    print(f"dashboard listening on http://{host}:{port}", flush=True)
     server.serve_forever()
 
 

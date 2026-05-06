@@ -32,7 +32,7 @@
 - **本地优先**：所有用量数据保存在本机 SQLite，不上传到第三方服务。
 - **最小依赖**：只依赖 Python 标准库，不需要安装 Redis 客户端或 Web 框架。
 - **脱敏发布**：仓库只包含源码、模板和说明，不包含 API key、OAuth token、数据库或日志。
-- **可长期运行**：提供 macOS LaunchAgent 模板，采集器和面板可以开机自启。
+- **可长期运行**：提供 Docker Compose 和 macOS LaunchAgent 模板，采集器和面板可以后台运行。
 
 ## 架构图
 
@@ -149,7 +149,9 @@ chmod 600 ~/.cli-proxy-api/usage-dashboard/config.json
   "poll_interval_seconds": 2,
   "quota_refresh_seconds": 300,
   "dashboard_host": "127.0.0.1",
-  "dashboard_port": 8320
+  "dashboard_port": 8320,
+  "hud_default_range": "5h",
+  "hud_quota_limit": 3
 }
 ```
 
@@ -184,6 +186,61 @@ python3 ~/.cli-proxy-api/usage-dashboard/usage_dashboard.py serve
 ```text
 http://127.0.0.1:8320
 ```
+
+## Docker 部署
+
+适合服务器长期运行。CLIProxyAPI 如果也是 Docker `network_mode: host`，本项目也建议使用 host 网络，采集器可以直接访问宿主机上的 `127.0.0.1:8317`。
+
+创建 `.env`：
+
+```bash
+CLIPROXY_MANAGEMENT_KEY=your-cliproxy-management-key
+CLIPROXY_AUTH_DIR=/root/.cli-proxy-api
+CLIPROXY_DASHBOARD_HOST=127.0.0.1
+CLIPROXY_DASHBOARD_PORT=8320
+```
+
+其中 `CLIPROXY_AUTH_DIR` 要指向宿主机上保存 `codex-*.json` 的目录。
+
+启动：
+
+```bash
+docker compose up -d --build
+```
+
+查看日志：
+
+```bash
+docker compose logs -f usage-collector
+docker compose logs -f usage-dashboard
+```
+
+检查接口：
+
+```bash
+curl http://127.0.0.1:8320/api/health
+```
+
+## 雷池反代
+
+如果雷池能访问宿主机 loopback，推荐保持：
+
+```text
+CLIPROXY_DASHBOARD_HOST=127.0.0.1
+CLIPROXY_DASHBOARD_PORT=8320
+```
+
+雷池 upstream 指向：
+
+```text
+http://127.0.0.1:8320
+```
+
+如果雷池运行在普通 Docker bridge 网络中，容器内的 `127.0.0.1` 不是宿主机，需要选择其中一种方式：
+
+- 让雷池也使用 host 网络；
+- 使用可访问宿主机的 gateway 地址；
+- 将面板改为监听 `0.0.0.0`，并配合防火墙和雷池访问控制。
 
 ## macOS 后台运行
 
@@ -240,7 +297,7 @@ python3 ~/.cli-proxy-api/usage-dashboard/usage_dashboard.py quota --force
 
 ## API
 
-网页服务同时提供本地 JSON API：
+网页服务同时提供 JSON API：
 
 ```text
 GET /api/health
@@ -249,6 +306,7 @@ GET /api/summary?range=5h
 GET /api/quota
 GET /api/quota?force=1
 GET /api/requests?limit=100
+GET /api/hud?range=5h
 ```
 
 `range` 支持：
@@ -258,6 +316,53 @@ GET /api/requests?limit=100
 - `5h`
 - `24h`
 - `7d`
+
+### HUD 接口
+
+`/api/hud` 返回适合状态栏展示的一行文本和结构化数据：
+
+```bash
+curl -s "http://127.0.0.1:8320/api/hud?range=5h"
+```
+
+示例响应：
+
+```json
+{
+  "ok": true,
+  "range": "5h",
+  "text": "Codex 5h 123.4k tok | req 42 | fail 0 | quota min 67% 5h / 55% 7d",
+  "usage": {
+    "requests": 42,
+    "failed": 0,
+    "total_tokens": 123456
+  },
+  "quota": {
+    "count": 2,
+    "limited": 0,
+    "min_primary_remaining_percent": 67,
+    "min_secondary_remaining_percent": 55
+  }
+}
+```
+
+### Claude Code status line
+
+本地可以用 `scripts/claude-code-statusline.py` 查询服务器 HUD 接口并输出一行文本：
+
+```bash
+export CLIPROXY_DASHBOARD_URL="https://your-dashboard.example.com"
+export CLIPROXY_HUD_RANGE="5h"
+python3 scripts/claude-code-statusline.py
+```
+
+输出示例：
+
+```text
+Codex 5h 123.4k tok | req 42 | fail 0 | quota min 67% 5h / 55% 7d
+```
+
+把上面的命令配置到 Claude Code 的 status line command 后，就可以在本地 Claude Code 里显示 Codex 用量。
 
 ## 数据文件
 
@@ -315,7 +420,7 @@ git grep -n -I "refresh_token\|id_token\|gho_\|Bearer [A-Za-z0-9]\|chatgpt_accou
 - 只能统计采集器启动之后的请求，历史数据无法补回。
 - CLIProxyAPI 的队列是短期队列，采集器长时间停止会丢失期间事件。
 - 账号余量查询依赖 ChatGPT 后端接口，接口变更时可能需要调整。
-- 面板默认不做多用户认证，应保持监听 `127.0.0.1`。
+- 如果暴露到反代或公网，建议在雷池侧配置访问控制。
 
 ## 许可证
 

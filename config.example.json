@@ -5,5 +5,7 @@
   "poll_interval_seconds": 2,
   "quota_refresh_seconds": 300,
   "dashboard_host": "127.0.0.1",
-  "dashboard_port": 8320
+  "dashboard_port": 8320,
+  "hud_default_range": "5h",
+  "hud_quota_limit": 3
 }
